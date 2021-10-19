@@ -39,7 +39,7 @@
 #include "src/core/ext/filters/client_channel/resolver/dns/dns_resolver_selection.h"
 #include "src/core/ext/filters/client_channel/resolver_registry.h"
 #include "src/core/ext/filters/client_channel/server_address.h"
-#include "src/core/ext/filters/client_channel/service_config.h"
+#include "src/core/ext/service_config/service_config.h"
 #include "src/core/lib/backoff/backoff.h"
 #include "src/core/lib/channel/channel_args.h"
 #include "src/core/lib/gpr/string.h"
@@ -313,7 +313,7 @@ void AresDnsResolver::OnResolved(void* arg, grpc_error_handle error) {
 void AresDnsResolver::OnResolvedLocked(grpc_error_handle error) {
   GPR_ASSERT(resolving_);
   resolving_ = false;
-  gpr_free(pending_request_);
+  delete pending_request_;
   pending_request_ = nullptr;
   if (shutdown_initiated_) {
     Unref(DEBUG_LOCATION, "OnResolvedLocked() shutdown");

@@ -47,7 +47,6 @@
 #include "src/core/lib/iomgr/nameser.h"
 #include "src/core/lib/iomgr/sockaddr.h"
 #include "src/core/lib/iomgr/timer.h"
-#include "src/core/lib/transport/authority_override.h"
 
 using grpc_core::ServerAddress;
 using grpc_core::ServerAddressList;
@@ -56,29 +55,6 @@ grpc_core::TraceFlag grpc_trace_cares_address_sorting(false,
                                                       "cares_address_sorting");
 
 grpc_core::TraceFlag grpc_trace_cares_resolver(false, "cares_resolver");
-
-typedef struct grpc_ares_ev_driver grpc_ares_ev_driver;
-
-struct grpc_ares_request {
-  /** indicates the DNS server to use, if specified */
-  struct ares_addr_port_node dns_server_addr;
-  /** following members are set in grpc_resolve_address_ares_impl */
-  /** closure to call when the request completes */
-  grpc_closure* on_done;
-  /** the pointer to receive the resolved addresses */
-  std::unique_ptr<grpc_core::ServerAddressList>* addresses_out;
-  /** the pointer to receive the resolved balancer addresses */
-  std::unique_ptr<grpc_core::ServerAddressList>* balancer_addresses_out;
-  /** the pointer to receive the service config in JSON */
-  char** service_config_json_out;
-  /** the evernt driver used by this request */
-  grpc_ares_ev_driver* ev_driver;
-  /** number of ongoing queries */
-  size_t pending_queries;
-
-  /** the errors explaining query failures, appended to in query callbacks */
-  grpc_error_handle error;
-};
 
 typedef struct fd_node {
   /** the owner of this fd node */
@@ -670,8 +646,8 @@ static void on_hostbyname_done_locked(void* arg, int status, int /*timeouts*/,
     for (size_t i = 0; hostent->h_addr_list[i] != nullptr; ++i) {
       absl::InlinedVector<grpc_arg, 1> args_to_add;
       if (hr->is_balancer) {
-        args_to_add.emplace_back(
-            grpc_core::CreateAuthorityOverrideChannelArg(hr->host));
+        args_to_add.emplace_back(grpc_channel_arg_string_create(
+            const_cast<char*>(GRPC_ARG_DEFAULT_AUTHORITY), hr->host));
       }
       grpc_channel_args* args = grpc_channel_args_copy_and_add(
           nullptr, args_to_add.data(), args_to_add.size());
@@ -1060,15 +1036,12 @@ static grpc_ares_request* grpc_dns_lookup_ares_locked_impl(
     std::unique_ptr<grpc_core::ServerAddressList>* balancer_addrs,
     char** service_config_json, int query_timeout_ms,
     std::shared_ptr<grpc_core::WorkSerializer> work_serializer) {
-  grpc_ares_request* r =
-      static_cast<grpc_ares_request*>(gpr_zalloc(sizeof(grpc_ares_request)));
+  grpc_ares_request* r = new grpc_ares_request();
   r->ev_driver = nullptr;
   r->on_done = on_done;
   r->addresses_out = addrs;
   r->balancer_addresses_out = balancer_addrs;
   r->service_config_json_out = service_config_json;
-  r->error = GRPC_ERROR_NONE;
-  r->pending_queries = 0;
   GRPC_CARES_TRACE_LOG(
       "request:%p c-ares grpc_dns_lookup_ares_locked_impl name=%s, "
       "default_port=%s",
@@ -1164,7 +1137,7 @@ typedef struct grpc_resolve_address_ares_request {
 
 static void on_dns_lookup_done_locked(grpc_resolve_address_ares_request* r,
                                       grpc_error_handle error) {
-  gpr_free(r->ares_request);
+  delete r->ares_request;
   grpc_resolved_addresses** resolved_addresses = r->addrs_out;
   if (r->addresses == nullptr || r->addresses->empty()) {
     *resolved_addresses = nullptr;
